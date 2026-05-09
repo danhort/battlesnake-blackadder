@@ -1,5 +1,5 @@
 import runServer from "./server";
-import { GameState, InfoResponse, MoveResponse } from "./types";
+import { Coord, GameState, InfoResponse, MoveResponse } from "./types";
 
 function info(): InfoResponse {
   console.log("INFO");
@@ -10,7 +10,7 @@ function info(): InfoResponse {
     color: "#000000",
     head: "tongue",
     tail: "bolt",
-    version: "0.2.0",
+    version: "0.3.0",
   };
 }
 
@@ -22,85 +22,177 @@ function end(gameState: GameState): void {
   console.log("GAME OVER\n");
 }
 
-function getSafeMoves(gameState: GameState) {
-  let moves: { [key: string]: boolean } = {
-    up: true,
-    down: true,
-    left: true,
-    right: true,
-  };
-
+function getSafeMoves({
+  gameState,
+  considerHeadOnCollisions = true,
+  boundaryBuffer = 0,
+}: {
+  gameState: GameState;
+  considerHeadOnCollisions?: boolean;
+  boundaryBuffer?: number;
+}) {
   const boardWidth = gameState.board.width;
   const boardHeight = gameState.board.height;
-  const headCoord = gameState.you.body[0];
-  const bodyCoords = gameState.you.body;
-  const otherSnakeCoords = gameState.board.snakes.flatMap((snake) => snake.body);
+  const mySnake = gameState.you;
+  const headCoord = mySnake.body[0];
+  const bodyCoords = mySnake.body;
+  const otherSnakes = gameState.board.snakes.filter((snake) => snake.id !== mySnake.id);
+  const otherSnakeCoords = otherSnakes.flatMap((snake) => snake.body);
 
-  if (
-    headCoord.x === 0 ||
-    bodyCoords.some((coord) => coord.x === headCoord.x - 1 && coord.y === headCoord.y) ||
-    otherSnakeCoords.some((coord) => coord.x === headCoord.x - 1 && coord.y === headCoord.y)
-  ) {
-    moves.left = false;
-  }
+  const otherPotentialSnakeHeadCoords = otherSnakes.flatMap((snake) =>
+    mySnake.length <= snake.length
+      ? [
+          { x: snake.body[0].x, y: snake.body[0].y + 1 },
+          { x: snake.body[0].x, y: snake.body[0].y - 1 },
+          { x: snake.body[0].x - 1, y: snake.body[0].y },
+          { x: snake.body[0].x + 1, y: snake.body[0].y },
+        ]
+      : []
+  );
 
-  if (
-    headCoord.x === boardWidth - 1 ||
-    bodyCoords.some((coord) => coord.x === headCoord.x + 1 && coord.y === headCoord.y) ||
-    otherSnakeCoords.some((coord) => coord.x === headCoord.x + 1 && coord.y === headCoord.y)
-  ) {
-    moves.right = false;
-  }
+  const isCoordSafe = (coord: Coord) => {
+    // Out of bounds check
+    if (
+      coord.x < 0 + boundaryBuffer ||
+      coord.x >= boardWidth - boundaryBuffer ||
+      coord.y < 0 + boundaryBuffer ||
+      coord.y >= boardHeight - boundaryBuffer
+    ) {
+      return false;
+    }
 
-  if (
-    headCoord.y === 0 ||
-    bodyCoords.some((coord) => coord.x === headCoord.x && coord.y === headCoord.y - 1) ||
-    otherSnakeCoords.some((coord) => coord.x === headCoord.x && coord.y === headCoord.y - 1)
-  ) {
-    moves.down = false;
-  }
+    // Check for collisions with own body
+    if (bodyCoords.some((bodyCoord) => bodyCoord.x === coord.x && bodyCoord.y === coord.y)) {
+      return false;
+    }
 
-  if (
-    headCoord.y === boardHeight - 1 ||
-    bodyCoords.some((coord) => coord.x === headCoord.x && coord.y === headCoord.y + 1) ||
-    otherSnakeCoords.some((coord) => coord.x === headCoord.x && coord.y === headCoord.y + 1)
-  ) {
-    moves.up = false;
-  }
+    // Check for collisions with other snakes' bodies
+    if (
+      otherSnakeCoords.some((snakeCoord) => snakeCoord.x === coord.x && snakeCoord.y === coord.y)
+    ) {
+      return false;
+    }
 
-  const safeMoves = Object.keys(moves).filter((key) => moves[key]);
+    // Check for potential head-on collisions with other snakes
+    if (
+      considerHeadOnCollisions &&
+      otherPotentialSnakeHeadCoords.some(
+        (potentialHeadCoord) => potentialHeadCoord.x === coord.x && potentialHeadCoord.y === coord.y
+      )
+    ) {
+      return false;
+    }
 
-  return safeMoves;
+    return true;
+  };
+
+  return {
+    up: isCoordSafe({ x: headCoord.x, y: headCoord.y + 1 }),
+    down: isCoordSafe({ x: headCoord.x, y: headCoord.y - 1 }),
+    left: isCoordSafe({ x: headCoord.x - 1, y: headCoord.y }),
+    right: isCoordSafe({ x: headCoord.x + 1, y: headCoord.y }),
+  };
 }
 
-function getPreferredMove(gameState: GameState) {
-  const safeMoves = getSafeMoves(gameState);
-  const headCoord = gameState.you.body[0];
-
-  const closestFoodCoords = gameState.board.food.reduce(
-    (closestFood, food) => {
-      const distance = Math.abs(food.x - headCoord.x) + Math.abs(food.y - headCoord.y);
-      return distance < closestFood.distance ? { coord: food, distance: distance } : closestFood;
+function getClosestCoords(coords: Coord[], myCoord: Coord) {
+  return coords.reduce(
+    (closestCoord, coord) => {
+      const distance = Math.abs(coord.x - myCoord.x) + Math.abs(coord.y - myCoord.y);
+      return distance < closestCoord.distance ? { coord, distance: distance } : closestCoord;
     },
     { coord: null, distance: Infinity } as {
       coord: { x: number; y: number } | null;
       distance: number;
     }
   );
+}
 
-  if (closestFoodCoords.coord) {
-    if (closestFoodCoords.coord.x < headCoord.x && safeMoves.includes("left")) {
-      return "left";
-    } else if (closestFoodCoords.coord.x > headCoord.x && safeMoves.includes("right")) {
-      return "right";
-    } else if (closestFoodCoords.coord.y < headCoord.y && safeMoves.includes("down")) {
-      return "down";
-    } else if (closestFoodCoords.coord.y > headCoord.y && safeMoves.includes("up")) {
-      return "up";
+function getMoveToCoords(
+  coord: Coord,
+  headCoord: Coord,
+  safeMoves: { up: boolean; down: boolean; left: boolean; right: boolean }
+) {
+  if (coord.x < headCoord.x && safeMoves.left) {
+    return "left";
+  } else if (coord.x > headCoord.x && safeMoves.right) {
+    return "right";
+  } else if (coord.y < headCoord.y && safeMoves.down) {
+    return "down";
+  } else if (coord.y > headCoord.y && safeMoves.up) {
+    return "up";
+  }
+
+  return null;
+}
+
+function getPreferredMove(gameState: GameState) {
+  const safeMoves = getSafeMoves({ gameState });
+  const safeMoveBuffer = getSafeMoves({ gameState, boundaryBuffer: 1 });
+  const probableSafeMoves = getSafeMoves({ gameState, considerHeadOnCollisions: false });
+  const mySnake = gameState.you;
+  const headCoord = mySnake.body[0];
+  const health = mySnake.health;
+  const otherSnakes = gameState.board.snakes.filter((snake) => snake.id !== mySnake.id);
+  const closestFoodCoords = getClosestCoords(gameState.board.food, headCoord);
+
+  if (health < 70 && closestFoodCoords.coord) {
+    const move = getMoveToCoords(
+      closestFoodCoords.coord,
+      headCoord,
+      health > 30 ? safeMoveBuffer : safeMoves
+    );
+
+    if (move) {
+      return move;
     }
   }
 
-  return safeMoves[Math.floor(Math.random() * safeMoves.length)];
+  const otherPotentialSnakeHeadCoords = otherSnakes.flatMap((snake) =>
+    mySnake.length > snake.length
+      ? [
+          { x: snake.body[0].x, y: snake.body[0].y + 1 },
+          { x: snake.body[0].x, y: snake.body[0].y - 1 },
+          { x: snake.body[0].x - 1, y: snake.body[0].y },
+          { x: snake.body[0].x + 1, y: snake.body[0].y },
+        ]
+      : []
+  );
+
+  const closestHeadCoord = getClosestCoords(otherPotentialSnakeHeadCoords, headCoord);
+
+  if (closestHeadCoord.coord) {
+    const move = getMoveToCoords(closestHeadCoord.coord, headCoord, safeMoveBuffer);
+
+    if (move) {
+      return move;
+    }
+  }
+
+  return safeMoveBuffer.up
+    ? "up"
+    : safeMoveBuffer.down
+      ? "down"
+      : safeMoveBuffer.left
+        ? "left"
+        : safeMoveBuffer.right
+          ? "right"
+          : safeMoves.up
+            ? "up"
+            : safeMoves.down
+              ? "down"
+              : safeMoves.left
+                ? "left"
+                : safeMoves.right
+                  ? "right"
+                  : probableSafeMoves.up
+                    ? "up"
+                    : probableSafeMoves.down
+                      ? "down"
+                      : probableSafeMoves.left
+                        ? "left"
+                        : probableSafeMoves.right
+                          ? "right"
+                          : "up";
 }
 
 function move(gameState: GameState): MoveResponse {
