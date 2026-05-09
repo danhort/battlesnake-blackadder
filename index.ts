@@ -136,11 +136,7 @@ function getPreferredMove(gameState: GameState) {
   const closestFoodCoords = getClosestCoords(gameState.board.food, headCoord);
 
   if (health < 70 && closestFoodCoords.coord) {
-    const move = getMoveToCoords(
-      closestFoodCoords.coord,
-      headCoord,
-      health > 30 ? safeMoveBuffer : safeMoves
-    );
+    const move = getMoveToCoords(closestFoodCoords.coord, headCoord, safeMoves);
 
     if (move) {
       return move;
